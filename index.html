@@ -30,6 +30,12 @@
             resize: vertical;
         }
         
+        .button-group {
+            display: flex;
+            gap: 10px;
+            flex-wrap: wrap;
+        }
+        
         button {
             padding: 10px 20px;
             font-size: 16px;
@@ -38,10 +44,28 @@
             border: none;
             border-radius: 5px;
             cursor: pointer;
+            flex: 1;
+            min-width: 100px;
         }
         
         button:hover {
             background-color: #45a049;
+        }
+        
+        button.danger {
+            background-color: #f44336;
+        }
+        
+        button.danger:hover {
+            background-color: #da190b;
+        }
+        
+        button.warning {
+            background-color: #ff9800;
+        }
+        
+        button.warning:hover {
+            background-color: #e68a00;
         }
         
         button:disabled {
@@ -55,25 +79,33 @@
             border-radius: 5px;
             font-family: monospace;
         }
+        
+        .voice-info {
+            font-size: 14px;
+            color: #666;
+            margin-top: 5px;
+        }
     </style>
 </head>
 <body>
     <div class="container">
         <div class="status" id="status">Status: Ready</div>
-    </div> 
+        <div class="status" id="queueStatus">Queue: Empty</div>
+        
         <div>
             <label for="voiceSelect">Select Voice:</label>
             <select id="voiceSelect"></select>
+            <div class="voice-info" id="voiceInfo"></div>
         </div>
         
         <textarea id="textInput" placeholder="Start typing here... Each word will be spoken when you press space..."></textarea>
         
-        <div>
-            <button id="pauseButton">Pause</button>
-            <button id="resumeButton">Resume</button>
-            <button id="stopButton">Stop</button>
+        <div class="button-group">
+            <button id="pauseResumeButton" class="warning">Pause</button>
+            <button id="stopButton" class="danger">Stop</button>
             <button id="clearButton">Clear Text</button>
         </div>
+    </div>
 
     <script>
         class SpeechQueue {
@@ -81,79 +113,150 @@
                 this.synth = window.speechSynthesis;
                 this.queue = [];
                 this.isSpeaking = false;
-                this.currentWord = '';
+                this.isPaused = false;
                 this.voices = [];
                 this.selectedVoice = null;
-                this.isPaused = false;
+                this.currentUtterance = null;
                 
-                this.initVoices();
+                // Initialize
+                this.loadVoices();
                 this.setupEventListeners();
+                
+                // Chrome loads voices asynchronously
+                if (speechSynthesis.onvoiceschanged !== undefined) {
+                    speechSynthesis.onvoiceschanged = () => {
+                        this.loadVoices();
+                    };
+                }
             }
             
-            initVoices() {
-                // Load voices when they become available
-                this.synth.onvoiceschanged = () => {
+            loadVoices() {
+                // Give the browser a moment to load voices
+                setTimeout(() => {
                     this.voices = this.synth.getVoices();
+                    console.log('Voices loaded:', this.voices.length);
                     this.populateVoiceList();
-                };
-                
-                // Initial attempt to get voices
-                this.voices = this.synth.getVoices();
-                this.populateVoiceList();
+                }, 100);
             }
             
             populateVoiceList() {
                 const voiceSelect = document.getElementById('voiceSelect');
+                const voiceInfo = document.getElementById('voiceInfo');
+                
+                if (!voiceSelect) return;
+                
+                // Clear existing options
                 voiceSelect.innerHTML = '';
                 
-                this.voices.forEach(voice => {
+                if (this.voices.length === 0) {
                     const option = document.createElement('option');
-                    option.value = voice.voiceURI;
-                    option.textContent = `${voice.name} (${voice.lang})`;
+                    option.textContent = 'No voices available';
+                    option.disabled = true;
                     voiceSelect.appendChild(option);
+                    voiceInfo.textContent = 'No voices found. Try reloading the page.';
+                    return;
+                }
+                
+                // Group voices by language
+                const voicesByLang = {};
+                this.voices.forEach(voice => {
+                    if (!voicesByLang[voice.lang]) {
+                        voicesByLang[voice.lang] = [];
+                    }
+                    voicesByLang[voice.lang].push(voice);
                 });
                 
-                // Try to select a default voice (prefer English)
-                const defaultVoice = this.voices.find(v => v.lang.includes('en'));
+                // Create option groups
+                Object.keys(voicesByLang).sort().forEach(lang => {
+                    const group = document.createElement('optgroup');
+                    group.label = lang;
+                    
+                    voicesByLang[lang].forEach(voice => {
+                        const option = document.createElement('option');
+                        option.value = voice.voiceURI;
+                        option.textContent = `${voice.name} ${voice.default ? '(Default)' : ''}`;
+                        option.lang = voice.lang;
+                        group.appendChild(option);
+                    });
+                    
+                    voiceSelect.appendChild(group);
+                });
+                
+                // Try to select a voice (prefer English, but don't force if user wants other languages)
+                const defaultVoice = this.voices.find(v => v.default) || 
+                                    this.voices.find(v => v.lang.includes('en')) ||
+                                    this.voices[0];
+                
                 if (defaultVoice) {
                     voiceSelect.value = defaultVoice.voiceURI;
                     this.selectedVoice = defaultVoice;
+                    voiceInfo.textContent = `Selected: ${defaultVoice.name} (${defaultVoice.lang})`;
                 }
+                
+                // Force a repaint for the select element
+                voiceSelect.style.display = 'none';
+                voiceSelect.offsetHeight;
+                voiceSelect.style.display = '';
             }
             
             setupEventListeners() {
                 const textInput = document.getElementById('textInput');
                 const voiceSelect = document.getElementById('voiceSelect');
-                const pauseButton = document.getElementById('pauseButton');
-                const resumeButton = document.getElementById('resumeButton');
+                const pauseResumeButton = document.getElementById('pauseResumeButton');
                 const stopButton = document.getElementById('stopButton');
                 const clearButton = document.getElementById('clearButton');
                 
+                // Text input handler
                 textInput.addEventListener('input', (e) => {
                     this.handleTextInput(e);
                 });
                 
+                // Voice selection handler - FIXED: Now properly changes voice
                 voiceSelect.addEventListener('change', (e) => {
-                    this.selectedVoice = this.voices.find(v => v.voiceURI === e.target.value);
+                    const selectedURI = e.target.value;
+                    this.selectedVoice = this.voices.find(v => v.voiceURI === selectedURI);
+                    
+                    const voiceInfo = document.getElementById('voiceInfo');
+                    if (this.selectedVoice) {
+                        voiceInfo.textContent = `Selected: ${this.selectedVoice.name} (${this.selectedVoice.lang})`;
+                        
+                        // Test the voice with a short phrase
+                        this.testVoice(this.selectedVoice);
+                    }
                 });
                 
-                pauseButton.addEventListener('click', () => {
-                    this.pause();
+                // Pause/Resume toggle button
+                pauseResumeButton.addEventListener('click', () => {
+                    this.togglePauseResume();
                 });
                 
-                resumeButton.addEventListener('click', () => {
-                    this.resume();
-                });
-                
+                // Stop button
                 stopButton.addEventListener('click', () => {
                     this.stop();
+                    // Reset pause button state
+                    const pauseResumeButton = document.getElementById('pauseResumeButton');
+                    pauseResumeButton.textContent = 'Pause';
+                    pauseResumeButton.classList.remove('resume');
+                    pauseResumeButton.classList.add('warning');
                 });
                 
+                // Clear button
                 clearButton.addEventListener('click', () => {
                     textInput.value = '';
                     this.queue = [];
                     this.updateStatus('Cleared');
+                    this.updateQueueStatus();
                 });
+            }
+            
+            testVoice(voice) {
+                // Briefly test if the voice works
+                if (voice) {
+                    const testUtterance = new SpeechSynthesisUtterance('test');
+                    testUtterance.voice = voice;
+                    testUtterance.volume = 0; // Mute the test
+                    this.synth.speak(testUtterance);
+                }
             }
             
             handleTextInput(event) {
@@ -162,8 +265,9 @@
                 
                 // Check if space was just pressed
                 if (lastChar === ' ') {
-                    // Extract the last word
-                    const words = input.slice(0, -1).split(' ');
+                    // Extract the last word (everything before the space, split by spaces)
+                    const textBeforeSpace = input.slice(0, -1);
+                    const words = textBeforeSpace.split(' ');
                     const lastWord = words[words.length - 1];
                     
                     if (lastWord && lastWord.trim().length > 0) {
@@ -174,7 +278,7 @@
             
             addToQueue(word) {
                 this.queue.push(word);
-                this.updateStatus(`Queued: ${word} | Queue length: ${this.queue.length}`);
+                this.updateQueueStatus();
                 
                 if (!this.isSpeaking && !this.isPaused) {
                     this.processQueue();
@@ -182,31 +286,41 @@
             }
             
             processQueue() {
-                if (this.queue.length === 0 || this.isPaused) {
+                // Don't process if paused or queue is empty
+                if (this.isPaused || this.queue.length === 0) {
                     this.isSpeaking = false;
                     return;
                 }
                 
                 this.isSpeaking = true;
                 const word = this.queue.shift();
+                this.updateQueueStatus();
                 
+                // Create utterance
                 const utterance = new SpeechSynthesisUtterance(word);
                 
+                // Apply selected voice - FIXED: Always use current selected voice
                 if (this.selectedVoice) {
                     utterance.voice = this.selectedVoice;
+                    console.log('Speaking with voice:', this.selectedVoice.name, this.selectedVoice.lang);
                 }
                 
-                // Set properties for better word-by-word speech
-                utterance.rate = 0.9; // Slightly slower for clarity
+                // Set properties
+                utterance.rate = 0.9;
                 utterance.pitch = 1;
                 utterance.volume = 1;
                 
+                // Store reference to current utterance
+                this.currentUtterance = utterance;
+                
                 utterance.onstart = () => {
-                    this.updateStatus(`Speaking: ${word} | Queue length: ${this.queue.length}`);
+                    this.updateStatus(`Speaking: ${word}`);
                 };
                 
                 utterance.onend = () => {
-                    // Process next word in queue
+                    this.currentUtterance = null;
+                    
+                    // Process next word if not paused
                     if (this.queue.length > 0 && !this.isPaused) {
                         this.processQueue();
                     } else {
@@ -217,11 +331,12 @@
                 
                 utterance.onerror = (event) => {
                     console.error('Speech error:', event);
+                    this.currentUtterance = null;
                     this.updateStatus(`Error: ${event.error}`);
                     this.isSpeaking = false;
                     
                     // Continue with queue despite error
-                    if (this.queue.length > 0) {
+                    if (this.queue.length > 0 && !this.isPaused) {
                         this.processQueue();
                     }
                 };
@@ -229,44 +344,98 @@
                 this.synth.speak(utterance);
             }
             
-            pause() {
-                if (this.synth.speaking && !this.synth.paused) {
-                    this.synth.pause();
-                    this.isPaused = true;
-                    this.updateStatus('Paused');
-                }
-            }
-            
-            resume() {
-                if (this.synth.paused) {
-                    this.synth.resume();
+            togglePauseResume() {
+                const button = document.getElementById('pauseResumeButton');
+                
+                if (this.isPaused) {
+                    // Resume
                     this.isPaused = false;
-                    this.updateStatus('Resumed');
+                    button.textContent = 'Pause';
+                    button.classList.remove('resume');
+                    button.classList.add('warning');
+                    
+                    // Resume speech synthesis
+                    if (this.synth.paused) {
+                        this.synth.resume();
+                    }
                     
                     // If we have queue but not speaking, start processing
                     if (this.queue.length > 0 && !this.isSpeaking) {
                         this.processQueue();
                     }
+                    
+                    this.updateStatus('Resumed');
+                } else {
+                    // Pause - FIXED: Queue continues, only speech pauses
+                    this.isPaused = true;
+                    button.textContent = 'Resume';
+                    button.classList.remove('warning');
+                    button.classList.add('resume');
+                    
+                    // Pause speech synthesis if speaking
+                    if (this.synth.speaking && !this.synth.paused) {
+                        this.synth.pause();
+                    }
+                    
+                    this.updateStatus('Paused (Queue continues)');
                 }
             }
             
             stop() {
+                // Cancel all speech
                 this.synth.cancel();
+                
+                // Clear queue but allow new words to be queued
                 this.queue = [];
                 this.isSpeaking = false;
                 this.isPaused = false;
+                this.currentUtterance = null;
+                
+                // Reset pause button if needed
+                const pauseResumeButton = document.getElementById('pauseResumeButton');
+                if (pauseResumeButton.textContent === 'Resume') {
+                    pauseResumeButton.textContent = 'Pause';
+                    pauseResumeButton.classList.remove('resume');
+                    pauseResumeButton.classList.add('warning');
+                }
+                
                 this.updateStatus('Stopped');
+                this.updateQueueStatus();
             }
             
             updateStatus(message) {
-                document.getElementById('status').textContent = `Status: ${message}`;
+                const statusEl = document.getElementById('status');
+                if (statusEl) {
+                    statusEl.textContent = `Status: ${message}`;
+                }
+            }
+            
+            updateQueueStatus() {
+                const queueStatusEl = document.getElementById('queueStatus');
+                if (queueStatusEl) {
+                    if (this.queue.length === 0) {
+                        queueStatusEl.textContent = 'Queue: Empty';
+                    } else {
+                        queueStatusEl.textContent = `Queue: ${this.queue.join(' → ')} (${this.queue.length} words)`;
+                    }
+                }
             }
         }
         
-        // Initialize the speech queue when the page loads
+        // Initialize when page loads
         window.addEventListener('load', () => {
-            new SpeechQueue();
+            // Small delay to ensure DOM is ready
+            setTimeout(() => {
+                new SpeechQueue();
+            }, 100);
         });
+        
+        // Also try to initialize immediately in case load event already fired
+        if (document.readyState === 'complete' || document.readyState === 'interactive') {
+            setTimeout(() => {
+                new SpeechQueue();
+            }, 100);
+        }
     </script>
 </body>
 </html>
