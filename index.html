@@ -1,0 +1,275 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Text to Speech Word Queue</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 50px auto;
+            padding: 20px;
+        }
+        
+        .container {
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+        }
+        
+        select, textarea {
+            padding: 10px;
+            font-size: 16px;
+            border: 2px solid #ddd;
+            border-radius: 5px;
+        }
+        
+        textarea {
+            min-height: 200px;
+            resize: vertical;
+        }
+        
+        button {
+            padding: 10px 20px;
+            font-size: 16px;
+            background-color: #4CAF50;
+            color: white;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+        }
+        
+        button:hover {
+            background-color: #45a049;
+        }
+        
+        button:disabled {
+            background-color: #cccccc;
+            cursor: not-allowed;
+        }
+        
+        .status {
+            padding: 10px;
+            background-color: #f0f0f0;
+            border-radius: 5px;
+            font-family: monospace;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Text to Speech Word Queue</h1>
+        
+        <div>
+            <label for="voiceSelect">Select Voice:</label>
+            <select id="voiceSelect"></select>
+        </div>
+        
+        <textarea id="textInput" placeholder="Start typing here... Each word will be spoken when you press space..."></textarea>
+        
+        <div>
+            <button id="pauseButton">Pause</button>
+            <button id="resumeButton">Resume</button>
+            <button id="stopButton">Stop</button>
+            <button id="clearButton">Clear Text</button>
+        </div>
+        
+        <div class="status" id="status">Status: Ready</div>
+    </div>
+
+    <script>
+        class SpeechQueue {
+            constructor() {
+                this.synth = window.speechSynthesis;
+                this.queue = [];
+                this.isSpeaking = false;
+                this.currentWord = '';
+                this.voices = [];
+                this.selectedVoice = null;
+                this.isPaused = false;
+                
+                this.initVoices();
+                this.setupEventListeners();
+            }
+            
+            initVoices() {
+                // Load voices when they become available
+                this.synth.onvoiceschanged = () => {
+                    this.voices = this.synth.getVoices();
+                    this.populateVoiceList();
+                };
+                
+                // Initial attempt to get voices
+                this.voices = this.synth.getVoices();
+                this.populateVoiceList();
+            }
+            
+            populateVoiceList() {
+                const voiceSelect = document.getElementById('voiceSelect');
+                voiceSelect.innerHTML = '';
+                
+                this.voices.forEach(voice => {
+                    const option = document.createElement('option');
+                    option.value = voice.voiceURI;
+                    option.textContent = `${voice.name} (${voice.lang})`;
+                    voiceSelect.appendChild(option);
+                });
+                
+                // Try to select a default voice (prefer English)
+                const defaultVoice = this.voices.find(v => v.lang.includes('en'));
+                if (defaultVoice) {
+                    voiceSelect.value = defaultVoice.voiceURI;
+                    this.selectedVoice = defaultVoice;
+                }
+            }
+            
+            setupEventListeners() {
+                const textInput = document.getElementById('textInput');
+                const voiceSelect = document.getElementById('voiceSelect');
+                const pauseButton = document.getElementById('pauseButton');
+                const resumeButton = document.getElementById('resumeButton');
+                const stopButton = document.getElementById('stopButton');
+                const clearButton = document.getElementById('clearButton');
+                
+                textInput.addEventListener('input', (e) => {
+                    this.handleTextInput(e);
+                });
+                
+                voiceSelect.addEventListener('change', (e) => {
+                    this.selectedVoice = this.voices.find(v => v.voiceURI === e.target.value);
+                });
+                
+                pauseButton.addEventListener('click', () => {
+                    this.pause();
+                });
+                
+                resumeButton.addEventListener('click', () => {
+                    this.resume();
+                });
+                
+                stopButton.addEventListener('click', () => {
+                    this.stop();
+                });
+                
+                clearButton.addEventListener('click', () => {
+                    textInput.value = '';
+                    this.queue = [];
+                    this.updateStatus('Cleared');
+                });
+            }
+            
+            handleTextInput(event) {
+                const input = event.target.value;
+                const lastChar = input[input.length - 1];
+                
+                // Check if space was just pressed
+                if (lastChar === ' ') {
+                    // Extract the last word
+                    const words = input.slice(0, -1).split(' ');
+                    const lastWord = words[words.length - 1];
+                    
+                    if (lastWord && lastWord.trim().length > 0) {
+                        this.addToQueue(lastWord);
+                    }
+                }
+            }
+            
+            addToQueue(word) {
+                this.queue.push(word);
+                this.updateStatus(`Queued: ${word} | Queue length: ${this.queue.length}`);
+                
+                if (!this.isSpeaking && !this.isPaused) {
+                    this.processQueue();
+                }
+            }
+            
+            processQueue() {
+                if (this.queue.length === 0 || this.isPaused) {
+                    this.isSpeaking = false;
+                    return;
+                }
+                
+                this.isSpeaking = true;
+                const word = this.queue.shift();
+                
+                const utterance = new SpeechSynthesisUtterance(word);
+                
+                if (this.selectedVoice) {
+                    utterance.voice = this.selectedVoice;
+                }
+                
+                // Set properties for better word-by-word speech
+                utterance.rate = 0.9; // Slightly slower for clarity
+                utterance.pitch = 1;
+                utterance.volume = 1;
+                
+                utterance.onstart = () => {
+                    this.updateStatus(`Speaking: ${word} | Queue length: ${this.queue.length}`);
+                };
+                
+                utterance.onend = () => {
+                    // Process next word in queue
+                    if (this.queue.length > 0 && !this.isPaused) {
+                        this.processQueue();
+                    } else {
+                        this.isSpeaking = false;
+                        this.updateStatus('Ready');
+                    }
+                };
+                
+                utterance.onerror = (event) => {
+                    console.error('Speech error:', event);
+                    this.updateStatus(`Error: ${event.error}`);
+                    this.isSpeaking = false;
+                    
+                    // Continue with queue despite error
+                    if (this.queue.length > 0) {
+                        this.processQueue();
+                    }
+                };
+                
+                this.synth.speak(utterance);
+            }
+            
+            pause() {
+                if (this.synth.speaking && !this.synth.paused) {
+                    this.synth.pause();
+                    this.isPaused = true;
+                    this.updateStatus('Paused');
+                }
+            }
+            
+            resume() {
+                if (this.synth.paused) {
+                    this.synth.resume();
+                    this.isPaused = false;
+                    this.updateStatus('Resumed');
+                    
+                    // If we have queue but not speaking, start processing
+                    if (this.queue.length > 0 && !this.isSpeaking) {
+                        this.processQueue();
+                    }
+                }
+            }
+            
+            stop() {
+                this.synth.cancel();
+                this.queue = [];
+                this.isSpeaking = false;
+                this.isPaused = false;
+                this.updateStatus('Stopped');
+            }
+            
+            updateStatus(message) {
+                document.getElementById('status').textContent = `Status: ${message}`;
+            }
+        }
+        
+        // Initialize the speech queue when the page loads
+        window.addEventListener('load', () => {
+            new SpeechQueue();
+        });
+    </script>
+</body>
+</html>
