@@ -59,8 +59,8 @@
 </head>
 <body>
     <div class="container">
-        <h1>Text to Speech Word Queue</h1>
-        
+        <div class="status" id="status">Status: Ready</div>
+    </div> 
         <div>
             <label for="voiceSelect">Select Voice:</label>
             <select id="voiceSelect"></select>
@@ -74,9 +74,6 @@
             <button id="stopButton">Stop</button>
             <button id="clearButton">Clear Text</button>
         </div>
-        
-        <div class="status" id="status">Status: Ready</div>
-    </div>
 
     <script>
         class SpeechQueue {
